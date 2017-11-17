@@ -522,14 +522,18 @@ static void httpevent_callback_fn(evutil_socket_t, short, void* data)
         delete self;
 }
 
-HTTPEvent::HTTPEvent(struct event_base* base, bool _deleteWhenTriggered, const std::function<void(void)>& _handler):
-    deleteWhenTriggered(_deleteWhenTriggered), handler(_handler)
+HTTPEvent::HTTPEvent(struct event_base* base, bool _deleteWhenTriggered, struct evbuffer *_databuf, const std::function<void(void)>& _handler):
+    deleteWhenTriggered(_deleteWhenTriggered), handler(_handler), databuf(_databuf)
 {
     ev = event_new(base, -1, 0, httpevent_callback_fn, this);
     assert(ev);
 }
+
 HTTPEvent::~HTTPEvent()
 {
+    if (databuf != NULL) {
+        evbuffer_free(databuf);
+    }
     event_free(ev);
 }
 void HTTPEvent::trigger(struct timeval* tv)
@@ -540,26 +544,26 @@ void HTTPEvent::trigger(struct timeval* tv)
         evtimer_add(ev, tv); // trigger after timeval passed
 }
 HTTPRequest::HTTPRequest(struct evhttp_request* _req) : req(_req),
-                                                       replySent(false)
+                                                        replySent(false),
+                                                        startedChunkTransfer(false)
 {
 //	auto conn = _req->evcon;
 
-	LogPrintf("http connected\n");
+    LogPrintf("http connected\n");
+    auto conn = evhttp_request_get_connection(req);
 
-	auto conn = evhttp_request_get_connection(req);
+    // bufferevent_enable(req->evcon->bufev, EV_READ);
+    // i guess another way to do this for JSON RPC is to write one empty whitespace and see if we get EOF -.-
 
-
-//	bufferevent_enable(req->evcon->bufev, EV_READ);
-	// i guess another way to do this for JSON RPC is to write one empty whitespace and see if we get EOF -.-
-
-	evhttp_connection_set_closecb(conn, [](struct evhttp_connection *conn, void *data) {
-		LogPrintf("http connection closed\n");
-	}, NULL);
+    evhttp_connection_set_closecb(conn,
+        [](struct evhttp_connection *conn, void *data) {
+        LogPrintf("http connection closed\n");
+    }, NULL);
 }
 
 HTTPRequest::~HTTPRequest()
 {
-    if (!replySent) {
+    if (!replySent && !startedChunkTransfer) {
         // Keep track of whether reply was sent to avoid request leaks
         LogPrintf("%s: Unhandled request\n", __func__);
         WriteReply(HTTP_INTERNAL, "Unhandled request");
@@ -602,11 +606,48 @@ std::string HTTPRequest::ReadBody()
     return rv;
 }
 
+bool HTTPRequest::ReplySent() {
+	return replySent;
+}
+
 void HTTPRequest::WriteHeader(const std::string& hdr, const std::string& value)
 {
     struct evkeyvalq* headers = evhttp_request_get_output_headers(req);
     assert(headers);
     evhttp_add_header(headers, hdr.c_str(), value.c_str());
+}
+
+void HTTPRequest::ChunkEnd() {
+	assert(startedChunkTransfer && !replySent);
+	HTTPEvent* ev = new HTTPEvent(eventBase, true, NULL,
+			std::bind(evhttp_send_reply_end, req));
+	ev->trigger(0);
+
+	replySent = true;
+}
+
+void HTTPRequest::Chunk(const std::string& chunk) {
+	assert(!replySent);
+
+	int status = 200;
+
+	// Assume that events will be executed in order
+	if (!startedChunkTransfer) {
+		HTTPEvent* ev = new HTTPEvent(eventBase, true, NULL,
+			std::bind(evhttp_send_reply_start, req, status, (const char*) NULL));
+		ev->trigger(0);
+
+		startedChunkTransfer = true;
+	}
+
+	if (chunk.size() > 0) {
+		auto databuf = evbuffer_new(); // HTTPEvent will free this buffer
+		evbuffer_add(databuf, chunk.data(), chunk.size());
+
+		HTTPEvent* ev = new HTTPEvent(eventBase, true, databuf,
+			std::bind(evhttp_send_reply_chunk, req, databuf));
+		ev->trigger(0);
+	}
 }
 
 /** Closure sent to main thread to request a reply to be sent to
@@ -621,7 +662,7 @@ void HTTPRequest::WriteReply(int nStatus, const std::string& strReply)
     struct evbuffer* evb = evhttp_request_get_output_buffer(req);
     assert(evb);
     evbuffer_add(evb, strReply.data(), strReply.size());
-    HTTPEvent* ev = new HTTPEvent(eventBase, true,
+    HTTPEvent* ev = new HTTPEvent(eventBase, true, NULL,
         std::bind(evhttp_send_reply, req, nStatus, (const char*)NULL, (struct evbuffer *)NULL));
     ev->trigger(0);
     replySent = true;

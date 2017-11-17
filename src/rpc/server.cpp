@@ -200,7 +200,7 @@ std::string CRPCTable::help(const std::string& strCommand) const
             continue;
         try
         {
-            JSONRPCRequest jreq;
+            JSONRPCRequest jreq(NULL);
             jreq.fHelp = true;
             rpcfn_type pfn = pcmd->actor;
             if (setDone.insert(pfn).second)
@@ -360,6 +360,10 @@ bool RPCIsInWarmup(std::string *outStatus)
     return fRPCInWarmup;
 }
 
+JSONRPCRequest::JSONRPCRequest(HTTPRequest *_req): JSONRPCRequest() {
+	req = _req;
+}
+
 void JSONRPCRequest::parse(const UniValue& valRequest)
 {
     // Parse request
@@ -394,7 +398,7 @@ static UniValue JSONRPCExecOne(const UniValue& req)
 {
     UniValue rpc_result(UniValue::VOBJ);
 
-    JSONRPCRequest jreq;
+    JSONRPCRequest jreq(NULL);
     try {
         jreq.parse(req);
 

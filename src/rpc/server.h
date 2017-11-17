@@ -18,6 +18,7 @@
 #include <boost/function.hpp>
 
 #include <univalue.h>
+#include <httpserver.h>
 
 static const unsigned int DEFAULT_RPC_SERIALIZE_VERSION = 1;
 
@@ -53,8 +54,15 @@ public:
     std::string URI;
     std::string authUser;
 
-    JSONRPCRequest() { id = NullUniValue; params = NullUniValue; fHelp = false; }
+    /**
+     * If using batch JSON request, this object won't get the underlying HTTPRequest.
+     */
+    JSONRPCRequest() { id = NullUniValue; params = NullUniValue; fHelp = false, req = NULL; };
+
+    JSONRPCRequest(HTTPRequest *_req);
     void parse(const UniValue& valRequest);
+private:
+    HTTPRequest *req;
 };
 
 /** Query whether RPC is running */
