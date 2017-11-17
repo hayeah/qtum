@@ -542,7 +542,21 @@ void HTTPEvent::trigger(struct timeval* tv)
 HTTPRequest::HTTPRequest(struct evhttp_request* _req) : req(_req),
                                                        replySent(false)
 {
+//	auto conn = _req->evcon;
+
+	LogPrintf("http connected\n");
+
+	auto conn = evhttp_request_get_connection(req);
+
+
+//	bufferevent_enable(req->evcon->bufev, EV_READ);
+	// i guess another way to do this for JSON RPC is to write one empty whitespace and see if we get EOF -.-
+
+	evhttp_connection_set_closecb(conn, [](struct evhttp_connection *conn, void *data) {
+		LogPrintf("http connection closed\n");
+	}, NULL);
 }
+
 HTTPRequest::~HTTPRequest()
 {
     if (!replySent) {
@@ -550,7 +564,11 @@ HTTPRequest::~HTTPRequest()
         LogPrintf("%s: Unhandled request\n", __func__);
         WriteReply(HTTP_INTERNAL, "Unhandled request");
     }
+
     // evhttpd cleans up the request, as long as a reply was sent.
+
+    // requires manual clean up because we called `evhttp_request_get_connection`
+    // evhttp_send_reply_end(req);
 }
 
 std::pair<bool, std::string> HTTPRequest::GetHeader(const std::string& hdr)
