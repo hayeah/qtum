@@ -1165,9 +1165,9 @@ bool getTopicsFromParams(const UniValue& params, std::vector<std::pair<unsigned,
     return true;
 }
 
-UniValue waitforlogs(const JSONRPCRequest& _request) {
+UniValue waitforlogs(const JSONRPCRequest& request_) {
     // this is a long poll function. force cast to non const pointer
-    auto request = (JSONRPCRequest&) _request;
+    JSONRPCRequest& request = (JSONRPCRequest&) request_;
 
     if (request.fHelp) {
         throw runtime_error(
@@ -1216,6 +1216,8 @@ UniValue waitforlogs(const JSONRPCRequest& _request) {
             && !getTopicsFromParams(request.params, topics))
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid topics");
 
+
+    request.PollStart();
     std::vector<std::vector<uint256>> hashesToBlock;
 
     int curheight = 0;
@@ -1244,7 +1246,7 @@ UniValue waitforlogs(const JSONRPCRequest& _request) {
                 std::unique_lock<std::mutex> lock(cs_blockchange);
                 auto blockHeight = latestblock.height;
 
-                request.Poll();
+                request.PollPing();
 
                 LogPrintf("waitforlogs: checking block height\n");
 
@@ -1253,9 +1255,8 @@ UniValue waitforlogs(const JSONRPCRequest& _request) {
                     break;
                 }
 
-                if (!request.IsAlive() || !IsRPCRunning()) {
+                if (!request.PollAlive() || !IsRPCRunning()) {
                     LogPrintf("client closed\n");
-                    request.PollCancel();
                     return NullUniValue;
                 }
             }
@@ -1311,12 +1312,7 @@ UniValue waitforlogs(const JSONRPCRequest& _request) {
     result.push_back(Pair("count", (int) jsonLogs.size()));
     result.push_back(Pair("nextblock", curheight + 1));
 
-    request.PollJSONReply(result);
-
-    // FIXME: make httprpc handle PollJSONReply...
-    return NullUniValue;
-
-//    return result;
+    return result;
 }
 
 UniValue searchlogs(const JSONRPCRequest& request)

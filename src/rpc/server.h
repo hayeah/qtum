@@ -54,24 +54,35 @@ public:
     std::string URI;
     std::string authUser;
 
+    bool isLongPolling;
+
     /**
      * If using batch JSON request, this object won't get the underlying HTTPRequest.
      */
-    JSONRPCRequest() { id = NullUniValue; params = NullUniValue; fHelp = false, req = NULL; };
+    JSONRPCRequest() {
+        id = NullUniValue;
+        params = NullUniValue;
+        fHelp = false;
+        req = NULL;
+        isLongPolling = false;
+    };
 
     JSONRPCRequest(HTTPRequest *_req);
 
-    void WriteChunk(const std::string& chunk);
+    /**
+     * Start long-polling
+     */
+    void PollStart();
 
     /**
-     * For long poll JSON request, send an empty space to client to check of it's still alive.
+     * Ping long-poll connection with an empty character to make sure it's still alive.
      */
-    void Poll();
+    void PollPing();
 
     /**
-     * Returns whether client connection is still alive.
+     * Returns whether the underlying long-poll connection is still alive.
      */
-    bool IsAlive();
+    bool PollAlive();
 
     /**
      * End a long poll request.
@@ -81,7 +92,7 @@ public:
     /**
      * Return the JSON result of a long poll request
      */
-    void PollJSONReply(const UniValue& result);
+    void PollReply(const UniValue& result);
 
 
     void parse(const UniValue& valRequest);

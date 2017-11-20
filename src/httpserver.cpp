@@ -670,6 +670,7 @@ void HTTPRequest::Chunk(const std::string& chunk) {
         startedChunkTransfer = true;
     }
 
+
     if (chunk.size() > 0) {
         auto databuf = evbuffer_new(); // HTTPEvent will free this buffer
         evbuffer_add(databuf, chunk.data(), chunk.size());

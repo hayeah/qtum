@@ -364,24 +364,30 @@ JSONRPCRequest::JSONRPCRequest(HTTPRequest *_req): JSONRPCRequest() {
 	req = _req;
 }
 
-void JSONRPCRequest::WriteChunk(const std::string& chunk) {
-    req->Chunk(chunk);
-}
-
-bool JSONRPCRequest::IsAlive() {
+bool JSONRPCRequest::PollAlive() {
     return !req->isConnClosed();
 }
 
-void JSONRPCRequest::Poll() {
+void JSONRPCRequest::PollStart() {
+    // send an empty space to the client to ensure that it's still alive.
+    assert(!isLongPolling);
+    req->Chunk(std::string(" "));
+    isLongPolling = true;
+}
+
+void JSONRPCRequest::PollPing() {
+    assert(isLongPolling);
     // send an empty space to the client to ensure that it's still alive.
     req->Chunk(std::string(" "));
 }
 
 void JSONRPCRequest::PollCancel() {
+    assert(isLongPolling);
     req->ChunkEnd();
 }
 
-void JSONRPCRequest::PollJSONReply(const UniValue& result) {
+void JSONRPCRequest::PollReply(const UniValue& result) {
+    assert(isLongPolling);
     UniValue reply(UniValue::VOBJ);
     reply.push_back(Pair("result", result));
 //    reply.push_back(Pair("error", NullUniValue));

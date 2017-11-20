@@ -194,11 +194,10 @@ static bool HTTPReq_JSONRPC(HTTPRequest* req, const std::string &)
 
             UniValue result = tableRPC.execute(jreq);
 
-            if (req->ReplySent()) {
+            if (jreq.isLongPolling) {
+                jreq.PollReply(result);
                 return true;
             }
-
-            // FIXME: probably should throw if started chunk transfer but !replySent
 
             // Send reply
             strReply = JSONRPCReply(result, NullUniValue, jreq.id);
