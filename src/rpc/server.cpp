@@ -364,6 +364,33 @@ JSONRPCRequest::JSONRPCRequest(HTTPRequest *_req): JSONRPCRequest() {
 	req = _req;
 }
 
+void JSONRPCRequest::WriteChunk(const std::string& chunk) {
+    req->Chunk(chunk);
+}
+
+bool JSONRPCRequest::IsAlive() {
+    return !req->isConnClosed();
+}
+
+void JSONRPCRequest::Poll() {
+    // send an empty space to the client to ensure that it's still alive.
+    req->Chunk(std::string(" "));
+}
+
+void JSONRPCRequest::PollCancel() {
+    req->ChunkEnd();
+}
+
+void JSONRPCRequest::PollJSONReply(const UniValue& result) {
+    UniValue reply(UniValue::VOBJ);
+    reply.push_back(Pair("result", result));
+//    reply.push_back(Pair("error", NullUniValue));
+    reply.push_back(Pair("id", id));
+
+    req->Chunk(reply.write() + "\n");
+    req->ChunkEnd();
+}
+
 void JSONRPCRequest::parse(const UniValue& valRequest)
 {
     // Parse request

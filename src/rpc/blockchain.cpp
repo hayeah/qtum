@@ -1165,34 +1165,36 @@ bool getTopicsFromParams(const UniValue& params, std::vector<std::pair<unsigned,
     return true;
 }
 
-UniValue waitforlogs(const JSONRPCRequest& request)
-{
+UniValue waitforlogs(const JSONRPCRequest& _request) {
+    // this is a long poll function. force cast to non const pointer
+    auto request = (JSONRPCRequest&) _request;
+
     if (request.fHelp) {
         throw runtime_error(
-            "waitforlogs (fromBlock) (txLimit) (address) (topics)\n"
-            "requires -logevents to be enabled");
+                "waitforlogs (fromBlock) (txLimit) (address) (topics)\n"
+                        "requires -logevents to be enabled");
     }
 
-    if(!fLogEvents)
+    if (!fLogEvents)
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Events indexing disabled");
 
     int fromBlock = -1;
 
     if (request.params.size() > 0) {
-    		fromBlock = request.params[0].get_int();
+        fromBlock = request.params[0].get_int();
     }
 
     if (fromBlock == -1) {
-		{
-			std::unique_lock<std::mutex> lock(cs_blockchange);
-			fromBlock = latestblock.height;
-		}
+        {
+            std::unique_lock<std::mutex> lock(cs_blockchange);
+            fromBlock = latestblock.height;
+        }
     }
 
     int ntx = 0;
 
     if (request.params.size() > 1) {
-    		ntx = request.params[1].get_int();
+        ntx = request.params[1].get_int();
     }
 
     if (ntx <= 0) {
@@ -1202,99 +1204,119 @@ UniValue waitforlogs(const JSONRPCRequest& request)
     std::set<dev::h160> addresses;
     std::vector<dev::h160> vecAddresses;
 
-	if (request.params.size() > 2) {
-		if (!getContarctAddressesFromParams(request.params, vecAddresses)) {
-			throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
-		}
-		addresses.insert(vecAddresses.begin(), vecAddresses.end());
-	}
+    if (request.params.size() > 2) {
+        if (!getContarctAddressesFromParams(request.params, vecAddresses)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
+        }
+        addresses.insert(vecAddresses.begin(), vecAddresses.end());
+    }
 
-	std::vector<std::pair<unsigned, dev::h256>> topics;
-	if (request.params.size() > 3 && !getTopicsFromParams(request.params, topics))
-		throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid topics");
+    std::vector<std::pair<unsigned, dev::h256>> topics;
+    if (request.params.size() > 3
+            && !getTopicsFromParams(request.params, topics))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid topics");
 
-	std::vector<std::vector<uint256>> hashesToBlock;
+    std::vector<std::vector<uint256>> hashesToBlock;
 
-	int curheight = 0;
+    int curheight = 0;
 
-	while (curheight == 0) {
-		{
-			LOCK(cs_main);
-			curheight = pblocktree->ReadHeightIndexFrom(fromBlock, ntx, hashesToBlock, addresses);
-		}
+    while (curheight == 0) {
+        {
+            LOCK(cs_main);
+            curheight = pblocktree->ReadHeightIndexFrom(fromBlock, ntx,
+                    hashesToBlock, addresses);
+        }
 
-		// if curheight >= fromBlock. Blockchain extended with new log entries. Return next block height to client.
-		//    nextBlock = curheight + 1
-		// if curheight == 0. No log entry found in index. Wait for new block then try again.
-		//    nextBlock = fromBlock
-		//
-		// if curheight advanced, but all filtered out, API should return empty array, but advancing the cursor anyway.
+        // if curheight >= fromBlock. Blockchain extended with new log entries. Return next block height to client.
+        //    nextBlock = curheight + 1
+        // if curheight == 0. No log entry found in index. Wait for new block then try again.
+        //    nextBlock = fromBlock
+        //
+        // if curheight advanced, but all filtered out, API should return empty array, but advancing the cursor anyway.
 
-		if (curheight > 0) {
-			break;
-		}
+        if (curheight > 0) {
+            break;
+        }
 
-		// wait for a new block to arrive
-		{
-			std::unique_lock<std::mutex> lock(cs_blockchange);
-			cond_blockchange.wait(lock);
-		}
+        // wait for a new block to arrive
+        {
+            while (true) {
+                std::unique_lock<std::mutex> lock(cs_blockchange);
+                auto blockHeight = latestblock.height;
 
-		// FIXME: wait should have a timeout. after wait, check if JSON request had been terminated.
+                request.Poll();
 
-		// If waited for too long, allow RPC server to kill this request.
-		boost::this_thread::interruption_point();
-	}
+                LogPrintf("waitforlogs: checking block height\n");
 
-	LOCK(cs_main);
+                cond_blockchange.wait_for(lock, std::chrono::milliseconds(300));
+                if (latestblock.height > blockHeight) {
+                    break;
+                }
 
-	boost::filesystem::path stateDir = GetDataDir() / "stateQtum";
-	StorageResults storageRes(stateDir.string());
+                if (!request.IsAlive() || !IsRPCRunning()) {
+                    LogPrintf("client closed\n");
+                    request.PollCancel();
+                    return NullUniValue;
+                }
+            }
+        }
+    }
 
-	UniValue jsonLogs(UniValue::VARR);
+    LOCK(cs_main);
 
-	for (auto txHashes: hashesToBlock) {
-		for (auto txHash: txHashes) {
-			std::vector<TransactionReceiptInfo> receipts = storageRes.getResult(uintToh256(txHash));
+    boost::filesystem::path stateDir = GetDataDir() / "stateQtum";
+    StorageResults storageRes(stateDir.string());
 
-			for(auto receipt : receipts) {
-				for (auto log : receipt.logs) {
+    UniValue jsonLogs(UniValue::VARR);
 
-					bool includeLog = true;
+    for (auto txHashes : hashesToBlock) {
+        for (auto txHash : txHashes) {
+            std::vector<TransactionReceiptInfo> receipts = storageRes.getResult(
+                    uintToh256(txHash));
 
-					// pair-wise comparison of log topics andfilter topics
-					for (auto topic : topics) {
-						auto i = topic.first;
-						auto filterTopicContent = topic.second;
-						auto topicContent = log.topics[i];
+            for (auto receipt : receipts) {
+                for (auto log : receipt.logs) {
 
-						if (topicContent != filterTopicContent) {
-							includeLog = false;
-							break;
-						}
-					}
+                    bool includeLog = true;
 
-					if (!includeLog) {
-						continue;
-					}
+                    // pair-wise comparison of log topics andfilter topics
+                    for (auto topic : topics) {
+                        auto i = topic.first;
+                        auto filterTopicContent = topic.second;
+                        auto topicContent = log.topics[i];
 
-					UniValue jsonLog(UniValue::VOBJ);
+                        if (topicContent != filterTopicContent) {
+                            includeLog = false;
+                            break;
+                        }
+                    }
 
-					assignJSON(jsonLog, receipt);
-					assignJSON(jsonLog, log, false);
+                    if (!includeLog) {
+                        continue;
+                    }
 
-					jsonLogs.push_back(jsonLog);
-				}
-			}
-		}
-	}
+                    UniValue jsonLog(UniValue::VOBJ);
 
-	UniValue result(UniValue::VOBJ);
-	result.push_back(Pair("entries", jsonLogs));
-	result.push_back(Pair("count", (int) jsonLogs.size()));
-	result.push_back(Pair("nextblock", curheight + 1));
+                    assignJSON(jsonLog, receipt);
+                    assignJSON(jsonLog, log, false);
 
-	return result;
+                    jsonLogs.push_back(jsonLog);
+                }
+            }
+        }
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.push_back(Pair("entries", jsonLogs));
+    result.push_back(Pair("count", (int) jsonLogs.size()));
+    result.push_back(Pair("nextblock", curheight + 1));
+
+    request.PollJSONReply(result);
+
+    // FIXME: make httprpc handle PollJSONReply...
+    return NullUniValue;
+
+//    return result;
 }
 
 UniValue searchlogs(const JSONRPCRequest& request)

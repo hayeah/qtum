@@ -8,6 +8,7 @@
 #include <string>
 #include <stdint.h>
 #include <functional>
+#include <mutex>
 
 static const int DEFAULT_HTTP_THREADS=4;
 static const int DEFAULT_HTTP_WORKQUEUE=16;
@@ -56,6 +57,13 @@ private:
     struct evhttp_request* req;
     bool replySent;
     bool startedChunkTransfer;
+    bool connClosed;
+
+    std::mutex cs;
+    std::condition_variable closeCv;
+
+    void startDetectClientClose();
+    void waitClientClose();
 
 public:
     HTTPRequest(struct evhttp_request* req);
@@ -68,6 +76,9 @@ public:
         HEAD,
         PUT
     };
+
+    void setConnClosed();
+    bool isConnClosed();
 
     /** Get requested URI.
      */

@@ -60,9 +60,36 @@ public:
     JSONRPCRequest() { id = NullUniValue; params = NullUniValue; fHelp = false, req = NULL; };
 
     JSONRPCRequest(HTTPRequest *_req);
+
+    void WriteChunk(const std::string& chunk);
+
+    /**
+     * For long poll JSON request, send an empty space to client to check of it's still alive.
+     */
+    void Poll();
+
+    /**
+     * Returns whether client connection is still alive.
+     */
+    bool IsAlive();
+
+    /**
+     * End a long poll request.
+     */
+    void PollCancel();
+
+    /**
+     * Return the JSON result of a long poll request
+     */
+    void PollJSONReply(const UniValue& result);
+
+
     void parse(const UniValue& valRequest);
-private:
+
+    // FIXME: make this private?
     HTTPRequest *req;
+//private:
+
 };
 
 /** Query whether RPC is running */
